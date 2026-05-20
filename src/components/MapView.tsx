@@ -22,7 +22,34 @@ interface Props {
 const MAP_W = 100;
 const MAP_H = 100;
 const CHAR_SIZE = 12;
-const SPEED = 0.25;
+const SPEED = 0.05;
+
+// Static map decorations: trees and grass patches (map coordinates, precomputed)
+const DECORATIONS = (() => {
+  const items: any[] = [];
+  // Trees
+  const treePositions = [
+    [8, 8], [18, 15], [82, 10], [75, 20], [90, 85], [10, 88],
+    [50, 4], [35, 12], [68, 5], [25, 92], [55, 95], [92, 40],
+    [5, 45], [95, 55], [40, 50], [60, 65], [15, 70], [85, 72]
+  ];
+  for (const [x, y] of treePositions) {
+    items.push({ type: 'tree', x, y });
+  }
+  // Grass patches
+  for (let i = 0; i < 50; i++) {
+    items.push({
+      type: 'grass',
+      x: 4 + Math.random() * 92,
+      y: 4 + Math.random() * 92,
+      rw: 3 + Math.random() * 5,
+      rh: 2 + Math.random() * 3,
+      rot: Math.random() * 360,
+      op: 0.1 + Math.random() * 0.15,
+    });
+  }
+  return items;
+})();
 
 function randomPos(existing: { x: number; y: number }[], margin: number): { x: number; y: number } {
   for (let attempt = 0; attempt < 50; attempt++) {
@@ -190,11 +217,49 @@ export default function MapView({ chatroomId, onMention }: Props) {
     <div ref={containerRef} className="map-container">
       <svg className="map-bg" width={containerW} height={containerH}>
         <defs>
+          {/* Grass ground gradient */}
+          <radialGradient id="groundGlow" cx="50%" cy="50%" r="70%">
+            <stop offset="0%" stop-color="#1a3a2a" />
+            <stop offset="100%" stop-color="#0f2a1e" />
+          </radialGradient>
           <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
             <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(100,255,218,0.06)" strokeWidth="1" />
           </pattern>
         </defs>
+        {/* Ground */}
+        <rect width={containerW} height={containerH} fill="url(#groundGlow)" />
         <rect width={containerW} height={containerH} fill="url(#grid)" />
+
+        {/* Decorations */}
+        {DECORATIONS.map((dec, i) => {
+          const dx = dec.x / MAP_W * containerW;
+          const dy = dec.y / MAP_H * containerH;
+          if (dec.type === 'grass') {
+            return (
+              <ellipse
+                key={`g${i}`}
+                cx={dx}
+                cy={dy}
+                rx={dec.rw * Math.min(sx, sy)}
+                ry={dec.rh * Math.min(sx, sy)}
+                fill={`rgba(50, 200, 80, ${dec.op})`}
+                transform={`rotate(${dec.rot}, ${dx}, ${dy})`}
+              />
+            );
+          }
+          if (dec.type === 'tree') {
+            const ts = Math.min(sx, sy) * 7;
+            return (
+              <g key={`t${i}`} transform={`translate(${dx}, ${dy})`}>
+                <rect x={-1.5} y={-2} width={3} height={ts * 0.5} rx={1} fill="#5a3d20" />
+                <ellipse cx={0} cy={-ts * 0.45} rx={ts * 0.35} ry={ts * 0.3} fill="#2d7a3a" opacity={0.85} />
+                <ellipse cx={-ts * 0.12} cy={-ts * 0.55} rx={ts * 0.22} ry={ts * 0.18} fill="#3a9a4a" opacity={0.6} />
+                <ellipse cx={ts * 0.12} cy={-ts * 0.5} rx={ts * 0.18} ry={ts * 0.15} fill="#3a9a4a" opacity={0.6} />
+              </g>
+            );
+          }
+          return null;
+        })}
       </svg>
 
       {chars.map((ch) => {
