@@ -5,11 +5,29 @@ interface Props {
   onSend: (content: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  prefill?: string;
+  onPrefillUsed?: () => void;
 }
 
-export default function UserInput({ onSend, disabled, placeholder }: Props) {
+export default function UserInput({ onSend, disabled, placeholder, prefill, onPrefillUsed }: Props) {
   const [value, setValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const prevPrefill = useRef('');
+
+  // Apply prefill from map click
+  if (prefill && prefill !== prevPrefill.current) {
+    prevPrefill.current = prefill;
+    // Append to current value or set if empty
+    setValue((prev) => {
+      const next = prev.trim() ? prev + ' ' + prefill : prefill;
+      return next;
+    });
+    onPrefillUsed?.();
+    // Focus textarea
+    setTimeout(() => {
+      textareaRef.current?.focus();
+    }, 0);
+  }
 
   const handleSend = () => {
     const trimmed = value.trim();
