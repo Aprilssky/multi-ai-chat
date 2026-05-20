@@ -1,7 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useChatroomStore } from '../stores/chatroomStore';
 import { useRoleStore } from '../stores/roleStore';
-import { Map } from 'lucide-react';
 
 interface CharState {
   id: string;
@@ -10,8 +9,6 @@ interface CharState {
   avatar: string;
   x: number;
   y: number;
-  vx: number;
-  vy: number;
   targetX: number;
   targetY: number;
   isMoving: boolean;
@@ -25,9 +22,8 @@ interface Props {
 const MAP_W = 100;
 const MAP_H = 100;
 const CHAR_SIZE = 12;
-const SPEED = 0.3;
+const SPEED = 0.25;
 
-// Generate random positions avoiding overlap
 function randomPos(existing: { x: number; y: number }[], margin: number): { x: number; y: number } {
   for (let attempt = 0; attempt < 50; attempt++) {
     const x = margin + Math.random() * (MAP_W - 2 * margin);
@@ -47,7 +43,7 @@ function randomTarget(): { x: number; y: number } {
   };
 }
 
-function distance(x1: number, y1: number, x2: number, y2: number): number {
+function dist(x1: number, y1: number, x2: number, y2: number): number {
   return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
 }
 
@@ -55,58 +51,54 @@ export default function MapView({ chatroomId, onMention }: Props) {
   const chatrooms = useChatroomStore((s) => s.chatrooms);
   const roles = useRoleStore((s) => s.roles);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [containerSize, setContainerSize] = useState({ w: 600, h: 400 });
+  const [containerW, setContainerW] = useState(600);
+  const [containerH, setContainerH] = useState(400);
   const [chars, setChars] = useState<CharState[]>([]);
-  const animRef = useRef<number>(0);
-  const lastUpdateRef = useRef<number>(0);
+  const animRef = useRef(0);
 
   const chatroom = chatrooms.find((c) => c.id === chatroomId);
-  const memberRoles = chatroom?.memberRoleIds
+  const memberRoles = (chatroom?.memberRoleIds || [])
     .map((rid) => roles.find((r) => r.id === rid))
-    .filter(Boolean) ?? [];
+    .filter(Boolean) as NonNullable<typeof roles[0]>[];
 
   // Get latest message for each role
-  const lastMessages = useRef<Map<string, string>>(new Map());
+  const lastMessages = useRef<Record<string, string>>({});
   const speakingRoles = useRef<Set<string>>(new Set());
 
   if (chatroom) {
     for (const msg of chatroom.messageHistory) {
       if (msg.roleId !== 'user' && msg.roleId !== 'system') {
-        if (!msg.isStreaming && msg.content) {
-          lastMessages.current.set(msg.roleId, msg.content);
-        }
-        // Show streaming messages too
         if (msg.isStreaming && msg.content) {
           speakingRoles.current.add(msg.roleId);
-          lastMessages.current.set(msg.roleId, msg.content);
+          lastMessages.current[msg.roleId] = msg.content;
         } else {
           speakingRoles.current.delete(msg.roleId);
+          if (msg.content) {
+            lastMessages.current[msg.roleId] = msg.content;
+          }
         }
       }
     }
   }
 
-  // Init characters on mount or when members change
+  // Init characters
   useEffect(() => {
     const occupied: { x: number; y: number }[] = [];
     const initChars: CharState[] = memberRoles.map((role) => {
       const pos = randomPos(occupied, CHAR_SIZE * 2);
       occupied.push(pos);
       return {
-        id: role!.id,
-        roleId: role!.id,
-        name: role!.name,
-        avatar: role!.avatar || '🤖',
+        id: role.id,
+        roleId: role.id,
+        name: role.name,
+        avatar: role.avatar || '🤖',
         x: pos.x,
         y: pos.y,
-        vx: 0,
-        vy: 0,
         targetX: pos.x,
         targetY: pos.y,
         isMoving: false,
       };
     });
-    // If no roles, add a placeholder
     if (initChars.length === 0) {
       initChars.push({
         id: 'placeholder',
@@ -115,15 +107,13 @@ export default function MapView({ chatroomId, onMention }: Props) {
         avatar: '👻',
         x: MAP_W / 2,
         y: MAP_H / 2,
-        vx: 0,
-        vy: 0,
         targetX: MAP_W / 2,
         targetY: MAP_H / 2,
         isMoving: false,
       });
     }
     setChars(initChars);
-  }, [chatroomId, memberRoles.length]);
+  }, [chatroomId]);
 
   // Resize observer
   useEffect(() => {
@@ -131,83 +121,66 @@ export default function MapView({ chatroomId, onMention }: Props) {
     if (!el) return;
     const ro = new ResizeObserver((entries) => {
       for (const e of entries) {
-        setContainerSize({ w: e.contentRect.width, h: e.contentRect.height });
+        setContainerW(e.contentRect.width);
+        setContainerH(e.contentRect.height);
       }
     });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
 
-  // Animation loop - update positions
+  // Animation loop
   useEffect(() => {
     let running = true;
+    let lastTime = performance.now();
+
     const tick = (time: number) => {
       if (!running) return;
-      const dt = Math.min((time - lastUpdateRef.current) / 16, 3);
-      lastUpdateRef.current = time;
+      const dt = Math.min((time - lastTime) / 16, 3);
+      lastTime = time;
 
       setChars((prev) =>
         prev.map((c) => {
           if (c.id === 'placeholder') return c;
-          // If we reached target, pick a new one
-          const dist = distance(c.x, c.y, c.targetX, c.targetY);
-          let newTargetX = c.targetX;
-          let newTargetY = c.targetY;
+          const d = dist(c.x, c.y, c.targetX, c.targetY);
+          let tx = c.targetX;
+          let ty = c.targetY;
 
-          if (dist < 2) {
-            // Pick new random target
+          if (d < 2) {
             const t = randomTarget();
-            newTargetX = t.x;
-            newTargetY = t.y;
+            tx = t.x;
+            ty = t.y;
           }
 
-          // Move toward target
-          const dx = newTargetX - c.x;
-          const dy = newTargetY - c.y;
-          const d = distance(0, 0, dx, dy);
-          if (d > 1) {
+          const dx = tx - c.x;
+          const dy = ty - c.y;
+          const dd = dist(0, 0, dx, dy);
+          if (dd > 1) {
             const step = SPEED * dt;
-            const nx = c.x + (dx / d) * step;
-            const ny = c.y + (dy / d) * step;
-            return { ...c, x: Math.max(CHAR_SIZE, Math.min(MAP_W - CHAR_SIZE, nx)), y: Math.max(CHAR_SIZE, Math.min(MAP_H - CHAR_SIZE, ny)), targetX: newTargetX, targetY: newTargetY, isMoving: true };
+            const nx = Math.max(CHAR_SIZE, Math.min(MAP_W - CHAR_SIZE, c.x + (dx / dd) * step));
+            const ny = Math.max(CHAR_SIZE, Math.min(MAP_H - CHAR_SIZE, c.y + (dy / dd) * step));
+            return { ...c, x: nx, y: ny, targetX: tx, targetY: ty, isMoving: d > 1 };
           }
           return { ...c, isMoving: false };
         })
       );
       animRef.current = requestAnimationFrame(tick);
     };
-    lastUpdateRef.current = performance.now();
+
     animRef.current = requestAnimationFrame(tick);
     return () => {
       running = false;
       cancelAnimationFrame(animRef.current);
     };
-  }, [chatroomId, memberRoles.length]);
+  }, [chatroomId]);
 
-  // Pause animation when not visible
-  useEffect(() => {
-    const handleVisibility = () => {
-      if (document.hidden) {
-        cancelAnimationFrame(animRef.current);
-      } else {
-        lastUpdateRef.current = performance.now();
-        animRef.current = requestAnimationFrame((t) => {
-          lastUpdateRef.current = t;
-          // Re-trigger via tick
-        });
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibility);
-    return () => document.removeEventListener('visibilitychange', handleVisibility);
-  }, []);
-
-  const scaleX = containerSize.w / MAP_W;
-  const scaleY = containerSize.h / MAP_H;
+  const sx = containerW / MAP_W;
+  const sy = containerH / MAP_H;
 
   if (memberRoles.length === 0) {
     return (
       <div className="map-empty">
-        <Map size={48} />
+        <MapEmptyIcon />
         <p>群聊中没有成员，请先添加角色</p>
       </div>
     );
@@ -215,55 +188,60 @@ export default function MapView({ chatroomId, onMention }: Props) {
 
   return (
     <div ref={containerRef} className="map-container">
-      {/* Background grid pattern */}
-      <svg className="map-bg" width={containerSize.w} height={containerSize.h}>
+      <svg className="map-bg" width={containerW} height={containerH}>
         <defs>
           <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
             <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(100,255,218,0.06)" strokeWidth="1" />
           </pattern>
         </defs>
-        <rect width="100%" height="100%" fill="url(#grid)" />
+        <rect width={containerW} height={containerH} fill="url(#grid)" />
       </svg>
 
-      {/* Characters */}
       {chars.map((ch) => {
+        if (ch.id === 'placeholder') return null;
         const role = roles.find((r) => r.id === ch.roleId);
-        if (!role && ch.id !== 'placeholder') return null;
+        if (!role) return null;
 
-        const px = ch.x * scaleX;
-        const py = ch.y * scaleY;
-        const size = CHAR_SIZE * scaleX;
-        const isSpeaking = ch.roleId !== '' && speakingRoles.current.has(ch.roleId);
-        const latestMsg = lastMessages.current.get(ch.roleId);
+        const px = ch.x * sx;
+        const py = ch.y * sy;
+        const csize = CHAR_SIZE * Math.min(sx, sy);
+        const isSpeaking = speakingRoles.current.has(ch.roleId);
+        const latestMsg = lastMessages.current[ch.roleId];
 
         return (
           <div
             key={ch.id}
-            className={`map-char ${ch.isMoving ? 'moving' : ''} ${isSpeaking ? 'speaking' : ''}`}
+            className={"map-char" + (ch.isMoving ? " moving" : "") + (isSpeaking ? " speaking" : "")}
             style={{
-              left: px - size / 2,
-              top: py - size / 2,
-              width: size,
-              height: size,
-              fontSize: size * 0.6,
+              left: px - csize / 2,
+              top: py - csize / 2,
+              width: csize,
+              height: csize,
+              fontSize: csize * 0.55,
             }}
-            onClick={() => {
-              if (ch.roleId) onMention(ch.name);
-            }}
+            onClick={() => { if (ch.roleId) onMention(ch.name); }}
             title={ch.name}
           >
             <span className="map-char-avatar">{ch.avatar}</span>
             <div className="map-char-name">{ch.name}</div>
-
-            {/* Speech bubble */}
             {isSpeaking && latestMsg && (
               <div className="map-speech-bubble">
-                {latestMsg.length > 30 ? latestMsg.slice(0, 30) + '…' : latestMsg}
+                {latestMsg.length > 30 ? latestMsg.slice(0, 30) + '...' : latestMsg}
               </div>
             )}
           </div>
         );
       })}
     </div>
+  );
+}
+
+function MapEmptyIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1.5" style={{ opacity: 0.5 }}>
+      <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+      <circle cx="12" cy="13" r="2" />
+      <path d="M12 11v-2" />
+    </svg>
   );
 }
