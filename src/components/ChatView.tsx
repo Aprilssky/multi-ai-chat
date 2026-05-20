@@ -2,6 +2,7 @@ import { useRef, useEffect, useState } from 'react';
 import { useChatroomStore } from '../stores/chatroomStore';
 import { useRoleStore } from '../stores/roleStore';
 import MessageBubble from './MessageBubble';
+import MapView from './MapView';
 import UserInput from './UserInput';
 import {
   Play,
@@ -11,6 +12,8 @@ import {
   ArrowLeft,
   MessageSquare,
   Bot,
+  Map,
+  MessageCircle,
 } from 'lucide-react';
 
 export default function ChatView() {
@@ -26,6 +29,8 @@ export default function ChatView() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [turnDelay, setTurnDelay] = useState(1500);
+  const [mapMode, setMapMode] = useState(false);
+  const [mentionHint, setMentionHint] = useState('');
 
   const chatroom = chatrooms.find((c) => c.id === activeChatroomId);
 
@@ -59,11 +64,9 @@ export default function ChatView() {
 
   const handleSend = (content: string) => {
     addUserMessage(chatroom.id, content);
-    // 如果有对话在运行，先停
     if (isRunning) {
       stopChat(chatroom.id);
     }
-    // 以 @提及 模式触发 AI 回复
     setTimeout(() => startChat(chatroom.id, 'mention'), 300);
   };
 
@@ -80,6 +83,10 @@ export default function ChatView() {
     updateChatroom(chatroom.id, {
       settings: { ...chatroom.settings, turnDelayMs: val },
     });
+  };
+
+  const handleMapMention = (roleName: string) => {
+    setMentionHint(`@${roleName} `);
   };
 
   return (
@@ -122,6 +129,16 @@ export default function ChatView() {
             </div>
           )}
 
+          {/* 地图/列表切换 */}
+          <button
+            className={`btn btn-sm ${mapMode ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setMapMode(!mapMode)}
+            title={mapMode ? '切换列表模式' : '切换地图模式'}
+          >
+            {mapMode ? <MessageCircle size={14} /> : <Map size={14} />}
+            {mapMode ? '列表' : '地图'}
+          </button>
+
           <button
             className={`btn btn-sm ${isRunning ? 'btn-danger' : 'btn-success'}`}
             onClick={handleStartStop}
@@ -149,31 +166,41 @@ export default function ChatView() {
         </div>
       </div>
 
-      {/* 消息列表 */}
-      <div className="messages-container">
-        {chatroom.messageHistory.length === 0 ? (
-          <div className="empty-messages">
-            <EmptyChatIcon />
-            <p>对话为空</p>
-            <p style={{ fontSize: 12 }}>发送消息时用 <strong>@角色名</strong> 提及 AI 角色，或点击「开始」让 AI 们自由讨论</p>
-          </div>
-        ) : (
-          chatroom.messageHistory.map((msg) => (
-            <MessageBubble
-              key={msg.id}
-              message={msg}
-              isUser={msg.roleId === 'user'}
-              isSystem={msg.roleId === 'system'}
-            />
-          ))
-        )}
-        <div ref={messagesEndRef} />
-      </div>
+      {/* 消息列表 / 地图视图 */}
+      {mapMode ? (
+        <div className="messages-container map-mode-container">
+          <MapView chatroomId={chatroom.id} onMention={handleMapMention} />
+        </div>
+      ) : (
+        <div className="messages-container">
+          {chatroom.messageHistory.length === 0 ? (
+            <div className="empty-messages">
+              <EmptyChatIcon />
+              <p>对话为空</p>
+              <p style={{ fontSize: 12 }}>
+                发送消息时用 <strong>@角色名</strong> 提及 AI 角色，或点击「地图」切换地图模式
+              </p>
+            </div>
+          ) : (
+            chatroom.messageHistory.map((msg) => (
+              <MessageBubble
+                key={msg.id}
+                message={msg}
+                isUser={msg.roleId === 'user'}
+                isSystem={msg.roleId === 'system'}
+              />
+            ))
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+      )}
 
       {/* 输入区 */}
       <UserInput
         onSend={handleSend}
         disabled={chatroom.memberRoleIds.length === 0}
+        prefill={mentionHint}
+        onPrefillUsed={() => setMentionHint('')}
         placeholder={
           chatroom.memberRoleIds.length === 0
             ? '请先添加成员到群聊'
