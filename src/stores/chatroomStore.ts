@@ -31,7 +31,7 @@ interface ChatroomState {
   finishAssistantMessage: (chatroomId: string, messageId: string) => void;
 
   // 对话控制
-  startChat: (chatroomId: string) => Promise<void>;
+  startChat: (chatroomId: string, mode?: 'mention' | 'cycle') => Promise<void>;
   stopChat: (chatroomId: string) => void;
 }
 
@@ -166,7 +166,7 @@ export const useChatroomStore = create<ChatroomState>((set, get) => ({
     });
   },
 
-  startChat: async (chatroomId) => {
+  startChat: async (chatroomId, mode = 'cycle') => {
     const state = get();
     const chatroom = state.chatrooms.find((c) => c.id === chatroomId);
     if (!chatroom || chatroom.memberRoleIds.length === 0) return;
@@ -192,7 +192,103 @@ export const useChatroomStore = create<ChatroomState>((set, get) => ({
     const configStore = useConfigStore.getState();
     const roleStore = useRoleStore.getState();
 
-    // 确定角色发言顺序
+    // ========== @提及模式：根据用户消息中的 @角色名 决定谁发言 ==========
+    if (mode === 'mention') {
+      const lastMessage = chatroom.messageHistory[chatroom.messageHistory.length - 1];
+      if (!lastMessage || lastMessage.roleId !== 'user') {
+        updateStatus('idle');
+        return;
+      }
+
+      // 获取群聊中所有角色的名字
+      const memberNames = chatroom.memberRoleIds
+        .map((rid) => roleStore.getRole(rid))
+        .filter(Boolean) as import('../types').Role[];
+
+      const mentions = extractMentions(lastMessage.content, memberNames.map((r) => r.name));
+
+      let targetRoles: import('../types').Role[] = [];
+      if (mentions.includes('__all__')) {
+        // @all → 所有角色都回复
+        targetRoles = memberNames;
+      } else if (mentions.length > 0) {
+        // 只找被 @ 的角色
+        targetRoles = memberNames.filter((r) => mentions.includes(r.name));
+      }
+
+      if (targetRoles.length === 0) {
+        // 没有 @ 任何人，不触发 AI 回复
+        updateStatus('idle');
+        return;
+      }
+
+      // 依次让被 @ 的角色发言
+      for (const role of targetRoles) {
+        if (abortController.signal.aborted) break;
+
+        updateStatus('running', role.id);
+
+        // 添加空的流式消息
+        const msg = get().addAssistantMessage(chatroomId, role.id, role.name);
+
+        // 获取 API 配置
+        const apiProfile = configStore.getProfile(role.apiProfileId);
+        if (!apiProfile) {
+          const errorMsg = createErrorMsg(`角色「${role.name}」未配置有效的 API`);
+          set((s) => ({
+            chatrooms: s.chatrooms.map((c) =>
+              c.id === chatroomId
+                ? { ...c, messageHistory: [...c.messageHistory, errorMsg] }
+                : c
+            ),
+          }));
+          continue;
+        }
+
+        // 构建消息历史
+        const messages = buildChatMessages(role, getCurrentHistory(chatroomId), chatroom.settings.maxHistoryMessages);
+
+        // 使用单独的 abort controller 来控制流
+        const streamAbortController = new AbortController();
+        abortController.signal.addEventListener('abort', () => {
+          streamAbortController.abort();
+        });
+
+        try {
+          let fullContent = '';
+          for await (const chunk of streamChat(apiProfile, messages, {
+            model: role.model || undefined,
+            temperature: role.temperature,
+          })) {
+            if (streamAbortController.signal.aborted) break;
+            fullContent += chunk;
+            get().updateAssistantMessage(chatroomId, msg.id, fullContent);
+          }
+
+          if (!streamAbortController.signal.aborted) {
+            get().finishAssistantMessage(chatroomId, msg.id);
+          }
+        } catch (error) {
+          if (streamAbortController.signal.aborted) break;
+          const errorMsg = createErrorMsg(`「${role.name}」回复失败: ${error instanceof Error ? error.message : String(error)}`);
+          set((s) => ({
+            chatrooms: s.chatrooms.map((c) =>
+              c.id === chatroomId
+                ? { ...c, messageHistory: [...c.messageHistory, errorMsg] }
+                : c
+            ),
+          }));
+        }
+
+        // 角色间延迟
+        await delay(getTurnDelay(chatroomId));
+      }
+
+      updateStatus('idle');
+      return;
+    }
+
+    // ========== 循环模式：角色依次自动发言（点击「开始」按钮时） ==========
     const getNextSpeaker = (lastSpeakerIndex: number): { role: import('../types').Role; index: number } | null => {
       const currentChatroom = get().chatrooms.find((c) => c.id === chatroomId);
       if (!currentChatroom) return null;
@@ -205,9 +301,7 @@ export const useChatroomStore = create<ChatroomState>((set, get) => ({
       return role ? { role, index: nextIndex } : null;
     };
 
-    // 定义发言函数
     const speak = async (lastSpeakerIndex: number): Promise<void> => {
-      // 检查是否被中止
       if (abortController.signal.aborted) {
         updateStatus('idle');
         return;
@@ -225,10 +319,8 @@ export const useChatroomStore = create<ChatroomState>((set, get) => ({
       const { role, index } = next;
       updateStatus('running', role.id);
 
-      // 添加空的流式消息
       const msg = get().addAssistantMessage(chatroomId, role.id, role.name);
 
-      // 获取 API 配置
       const apiProfile = configStore.getProfile(role.apiProfileId);
       if (!apiProfile) {
         const errorMsg = createErrorMsg(`角色「${role.name}」未配置有效的 API`);
@@ -239,17 +331,13 @@ export const useChatroomStore = create<ChatroomState>((set, get) => ({
               : c
           ),
         }));
-        // 继续下一个角色
         await delay(getTurnDelay(chatroomId));
         return speak(index);
       }
 
-      // 构建消息历史
       const messages = buildChatMessages(role, getCurrentHistory(chatroomId), currentChatroom.settings.maxHistoryMessages);
 
-      // 使用单独的 abort controller 来控制流
       const streamAbortController = new AbortController();
-      // 注册到主 abort controller
       abortController.signal.addEventListener('abort', () => {
         streamAbortController.abort();
       });
@@ -280,7 +368,6 @@ export const useChatroomStore = create<ChatroomState>((set, get) => ({
         }));
       }
 
-      // 延迟后进入下一个角色
       if (abortController.signal.aborted) {
         updateStatus('idle');
         return;
@@ -290,7 +377,6 @@ export const useChatroomStore = create<ChatroomState>((set, get) => ({
       return speak(index);
     };
 
-    // 从当前或上一个发言者之后开始
     const startIndex = chatroom.memberRoleIds.findIndex(
       (rid) => rid === chatroom.currentSpeakerRoleId
     );
@@ -335,3 +421,30 @@ function getCurrentHistory(chatroomId: string): Message[] {
   const chatroom = useChatroomStore.getState().chatrooms.find((c) => c.id === chatroomId);
   return chatroom?.messageHistory || [];
 }
+
+// ===== @提及提取 =====
+
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 从文本中提取 @角色名 提及
+ * 返回匹配的角色名数组，如果包含 @all 则返回 ['__all__']
+ */
+export function extractMentions(text: string, roleNames: string[]): string[] {
+  // 先检查 @all
+  if (/@all/i.test(text)) {
+    return ['__all__'];
+  }
+
+  const found: string[] = [];
+  for (const name of roleNames) {
+    const regex = new RegExp(`@${escapeRegExp(name)}`);
+    if (regex.test(text)) {
+      found.push(name);
+    }
+  }
+  return found;
+}
+
