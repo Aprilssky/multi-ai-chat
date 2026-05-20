@@ -63,15 +63,15 @@ export default function ChatView() {
     if (isRunning) {
       stopChat(chatroom.id);
     }
-    // 自动开始对话（触发 AI 回复）
-    setTimeout(() => startChat(chatroom.id), 300);
+    // 以 @提及 模式触发 AI 回复
+    setTimeout(() => startChat(chatroom.id, 'mention'), 300);
   };
 
   const handleStartStop = () => {
     if (isRunning) {
       stopChat(chatroom.id);
     } else {
-      startChat(chatroom.id);
+      startChat(chatroom.id, 'cycle');
     }
   };
 
@@ -155,7 +155,7 @@ export default function ChatView() {
           <div className="empty-messages">
             <EmptyChatIcon />
             <p>对话为空</p>
-            <p style={{ fontSize: 12 }}>发送一条消息或点击「开始」让 AI 们自由讨论</p>
+            <p style={{ fontSize: 12 }}>发送消息时用 <strong>@角色名</strong> 提及 AI 角色，或点击「开始」让 AI 们自由讨论</p>
           </div>
         ) : (
           chatroom.messageHistory.map((msg) => (
@@ -177,7 +177,7 @@ export default function ChatView() {
         placeholder={
           chatroom.memberRoleIds.length === 0
             ? '请先添加成员到群聊'
-            : '输入消息...'
+            : '输入消息... @角色名 提及 AI'
         }
       />
     </div>
