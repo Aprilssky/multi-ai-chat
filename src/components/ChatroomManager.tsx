@@ -31,11 +31,76 @@ export default function ChatroomManager() {
     setSelectedMembers([]);
   };
 
+  // 创建群聊 Modal 内容（两个视图共用）
+  const createModal = showCreate && (
+    <div className="modal-overlay" onClick={() => setShowCreate(false)}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div className="modal-title">创建群聊</div>
+          <button className="btn btn-ghost btn-sm" onClick={() => setShowCreate(false)}>
+            ✕
+          </button>
+        </div>
+        <div className="modal-body">
+          <div className="form-group">
+            <label className="form-label">群聊名称</label>
+            <input
+              className="form-input"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="例如：哲学茶话会"
+            />
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">选择成员</label>
+            {roles.length === 0 ? (
+              <div className="no-roles-hint">
+                还没有角色。请先在「角色」页面创建一些 AI 角色。
+              </div>
+            ) : (
+              <div className="members-container">
+                <div className="member-select">
+                  {roles.map((role) => (
+                    <button
+                      key={role.id}
+                      className={`member-chip ${selectedMembers.includes(role.id) ? 'selected' : ''}`}
+                      onClick={() => {
+                        setSelectedMembers((prev) =>
+                          prev.includes(role.id)
+                            ? prev.filter((id) => id !== role.id)
+                            : [...prev, role.id]
+                        );
+                      }}
+                    >
+                      <span className="emoji">{role.avatar || '🤖'}</span>
+                      {role.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div className="form-hint">已选择 {selectedMembers.length} 个成员</div>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={() => setShowCreate(false)}>
+            取消
+          </button>
+          <button className="btn btn-primary" onClick={handleCreate}>
+            创建群聊
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   // 如果已选中群聊，显示聊天视图
   if (activeChatroomId) {
     const activeChatroom = chatrooms.find((c) => c.id === activeChatroomId);
     if (activeChatroom) {
       return (
+        <>
         <div style={{ display: 'flex', height: '100%' }}>
           {/* 左侧群聊列表 */}
           <div className="chatroom-sidebar">
@@ -90,12 +155,15 @@ export default function ChatroomManager() {
             <ChatView />
           </div>
         </div>
+        {createModal}
+        </>
       );
     }
   }
 
   // 无选中群聊时的默认视图
   return (
+    <>
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div className="page-title">群聊管理</div>
       <div className="page-subtitle">创建和管理多 AI 群聊</div>
@@ -151,70 +219,9 @@ export default function ChatroomManager() {
         )}
       </div>
 
-      {/* 创建群聊 Modal */}
-      {showCreate && (
-        <div className="modal-overlay" onClick={() => setShowCreate(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-title">创建群聊</div>
-              <button className="btn btn-ghost btn-sm" onClick={() => setShowCreate(false)}>
-                ✕
-              </button>
-            </div>
-            <div className="modal-body">
-              <div className="form-group">
-                <label className="form-label">群聊名称</label>
-                <input
-                  className="form-input"
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder="例如：哲学茶话会"
-                />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">选择成员</label>
-                {roles.length === 0 ? (
-                  <div className="no-roles-hint">
-                    还没有角色。请先在「角色」页面创建一些 AI 角色。
-                  </div>
-                ) : (
-                  <div className="members-container">
-                    <div className="member-select">
-                      {roles.map((role) => (
-                        <button
-                          key={role.id}
-                          className={`member-chip ${selectedMembers.includes(role.id) ? 'selected' : ''}`}
-                          onClick={() => {
-                            setSelectedMembers((prev) =>
-                              prev.includes(role.id)
-                                ? prev.filter((id) => id !== role.id)
-                                : [...prev, role.id]
-                            );
-                          }}
-                        >
-                          <span className="emoji">{role.avatar || '🤖'}</span>
-                          {role.name}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                <div className="form-hint">已选择 {selectedMembers.length} 个成员</div>
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-ghost" onClick={() => setShowCreate(false)}>
-                取消
-              </button>
-              <button className="btn btn-primary" onClick={handleCreate}>
-                创建群聊
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {createModal}
     </div>
+    </>
   );
 }
 
